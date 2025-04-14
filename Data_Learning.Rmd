@@ -1,0 +1,402 @@
+---
+title: "Data_Learning"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    latex_engine: lualatex
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+options(repos = c(CRAN = "https://cran.rstudio.com"))
+install.packages("caret")
+install.packages("pROC")
+library(pROC)
+library(rpart)
+library(rpart.plot)
+library(caret)
+library(ggplot2)
+library(randomForest)
+library(randomForestSRC)
+library(xgboost)
+library(gam)
+library(mgcv)
+library(Amelia)
+```
+
+#Task 1
+#yi =(⌊10∗x1+1⌋+⌊10∗x2+1⌋) mod2,
+#where ⌊·⌋ is the floor function: ⌊x⌋ = max{m ∈ Z|m ≤ x}.
+
+```{r}
+set.seed(123)
+#1a
+n=1000000
+X_1=runif(n, min=0, max=1)
+X_2=runif(n, min=0, max=1)
+Y=(floor(10*X_1+1)+floor(10*X_2+1))%%2
+```
+
+#(b) Convert the variable y into a factor type and create a data frame with y,x1,x2.
+```{r}
+#1b
+y=factor(Y)
+my_data=data.frame(y, X_1, X_2)
+```
+
+#(c) Plot the data on a scatter plot, where X1 is on the horizontal axis, X2 is on the vertical axis, and the colour of the data is based on the class Y .
+```{r}
+#1c
+ggplot(my_data, mapping=aes(x=X_1,y=X_2,color=factor(y)))+geom_point()
+```
+
+#(d) The image exhibits a pattern resembling a chessboard, which results from the binary variable yi being influenced by two independent variables, x1 and x2. The condition for yi to be 0 is when both ⌊10∗x1+1⌋ and ⌊10∗x2+1⌋ are either odd or even numbers. Conversely, yi is set to 1 when one is odd and the other is even. Since the independent variables x1 and x2 are identically distributed and processed similarly, the image demonstrates a symmetrical pattern with sections akin to a chessboard.
+
+#(e) Given that yi is a binary variable, to mitigate the impact of sample randomness on model fitting, I opted for stratified sampling. From the total samples of yi=0 and yi=1, 5000 samples were extracted from each. These samples were then divided into training and testing datasets in a 7:3 ratio. Finally, a parameter for 10-fold cross-validation was established for subsequent model fitting.
+```{r}
+#1e
+n_samples=10000
+#5000 for each group
+n_samples_per_layer=round(n_samples*table(my_data$y)/n)
+#Group by y, randomly sample each group separately, and then combine the results into a new data frame
+selected_data=do.call(rbind,
+                        lapply(split(my_data, my_data$y), function(df) 
+                          df[sample(nrow(df), 
+                                    n_samples_per_layer[df$y[1]],
+                                    replace = FALSE),]))
+train_indices=sample(1:nrow(selected_data), 0.7 * nrow(selected_data))
+train_data=selected_data[train_indices, ]
+test_data=selected_data[-train_indices, ]
+train_control=trainControl(method = "cv", number = 10)
+```
+
+
+#(f) As mentioned in 1 (d), the value of yi is determined by the parity of the two terms on the right side of the equation, which in turn depends on the values of x1 and x2. Whenever the value of one of these variables changes by 0.1, the parity of the corresponding term changes. This results in the two-dimensional plane, formed by these variables, being divided into 100 regions in a 10x10 grid. Therefore, a decision tree model can effectively determine the split thresholds at each node by learning from the training data. It utilizes the value ranges of x1 and x2 to partition the feature space, thoroughly learning the Data Generating Process (DGP) to achieve excellent classification results. The accuracy indeed reached an impressive 95.9%, demonstrating that the decision tree model can effectively learn the DGP.
+```{r}
+#1fCART
+CART_cv=train(y ~ X_1 + X_2, data = train_data, 
+              method = "rpart", 
+              parms = list(split = "gini"), 
+              trControl = train_control, 
+              tuneGrid = data.frame(cp = 0.0001))
+rpart.plot(CART_cv$finalModel, main="CART Model with 10 ford Cross-Validation")
+CARTpred=predict(CART_cv, newdata = test_data)
+sstCART=sum(CARTpred == test_data$y)/nrow(test_data)
+print(sstCART)
+```
+
+#(g) In the random forest model, each tree randomly selects samples from the training data, reducing the model's variance and enhancing its generalization capability. Since its performance is not reliant on any single decision tree, it can compensate for the shortcomings of individual decision tree models in partitioning the feature space and capturing data characteristics. This significantly improves accuracy and stability. With the benefit of 10-fold cross-validation, the prediction accuracy on the training set can reach as high as 97.5%.
+```{r}
+#1g random forest
+random_forest=randomForest(y~X_1+X_2,method="class", 
+                    trControl = train_control, 
+                    data=train_data,ntree = 150)
+rfpred=predict(random_forest, newdata=test_data, outcome.target=class)
+sstrf=sum(rfpred==test_data$y)/nrow(test_data)
+sstrf
+```
+#(h) Compared to decision tree models, the advantage of boosting lies in its ability to increase accuracy and capture more complex data patterns by combining multiple weak learners (e.g., decision trees). In contrast to random forests, the boosting model progressively corrects preceding models to improve performance, resulting in higher accuracy, adaptability, and flexibility. However, its proficiency in signal detection, including the capture of weak signals and noise, can lead to a propensity for overfitting. In this case, the highest prediction accuracy achieved by boosting was approximately 98%, the highest among the three models discussed.
+
+```{r}
+#1h
+train_matrix=as.matrix(train_data[, -which(names(train_data) == "y")])
+test_matrix=as.matrix(test_data[, -which(names(test_data) == "y")])
+label=as.numeric(train_data$y)-1
+xgb_model=xgboost(data = train_matrix, label = label, 
+                  trControl = train_control,
+                  nrounds = 100,
+                  eta=0.1,max_depth=10, objective="binary:hinge")
+pre=predict(xgb_model,test_matrix)
+sstxgb=mean(pre==test_data$y)
+sstxgb
+```
+
+#(i) I optimized the model by individually adjusting the number of trees and node depth, and then calculating the prediction accuracy under different model configurations. Based on the accuracy curves shown in the two graphs, we can infer that the random forest model achieves optimal performance with 20 trees and a node depth of 12. Interestingly, the graphs do not exhibit overfitting issues associated with increasing model complexity. This absence of overfitting may be attributed to the random forest model's robust resistance to noise and the inherent complexity of the data characteristics.
+```{r}
+#1i
+accuracy_1=numeric()
+for (i in 1:40){
+  random_forest=rfsrc(y~X_1+X_2,method="class",
+                      trControl = train_control,
+                      data=train_data,ntree = i)
+  rfpred=predict(random_forest, newdata=test_data, outcome.target=class)
+  accuracy_1[i]=sum(rfpred$class==test_data$y)/nrow(test_data)
+}
+accuracy_2=numeric()
+for (i in 1:30){
+  random_forest=rfsrc(y~X_1+X_2,method="class",
+                      trControl = train_control,
+                      data=train_data,ntree = 40,
+                      nodedepth=i)
+  rfpred=predict(random_forest, newdata=test_data, outcome.target=class)
+  accuracy_2[i]=sum(rfpred$class==test_data$y)/nrow(test_data)
+}
+par(mfrow = c(1, 1)) 
+plot(accuracy_1, main = "Accuracies for numbers of trees",
+     xlab = "number of trees", ylab = "Accuracy", type = 'l')
+plot(accuracy_2, main = "Accuracies for numbers of max depth",
+     xlab = "number of max depth", ylab = "Accuracy", type='l')
+```
+
+
+#Task 2
+
+```{r}
+bank=read.csv("/Users/jiyuzhang/Desktop/Leeds\ Master/semester_1/Learningfromdata/Coursework/Portuguese_Bank.csv", header = TRUE)
+```
+
+#(a) The dataset includes 15 variables that may potentially influence the dependent variable y. Among these, 'age', 'duration', 'campaign', 'pdays', and 'previous' are numerical variables, while the rest are categorical variables. The absence of missing values is evident from the missing map. Subsequent analysis using histograms and stacked bar charts suggests that 'age', 'duration', 'campaign', 'previous', 'month', and 'poutcome' have a significant impact on y.
+```{r}
+#a
+summary(bank)
+length(bank$duration)
+length(bank$campaign)
+length(bank$pdays)
+length(bank$previous)
+missmap(bank)
+bank$job=as.factor(bank$job)
+bank$marital=as.factor(bank$marital)
+bank$education=as.factor(bank$education)
+bank$default=as.factor(bank$default)
+bank$housing=as.factor(bank$housing)
+bank$loan=as.factor(bank$loan)
+bank$contact=as.factor(bank$contact)
+bank$month=as.factor(bank$month)
+bank$day_of_week=as.factor(bank$day_of_week)
+bank$poutcome=as.factor(bank$poutcome)
+bank$y=as.factor(bank$y)
+
+par(mar = c(5, 4, 4, 2) + 0.1, mfrow = c(1, 1), cex = 1.2, cex.axis = 1.1, cex.lab = 1.1)
+
+ggplot(bank, aes(x = age, fill = y)) +
+  geom_histogram(position = "dodge", binwidth = 1) +
+  ggtitle("y on age") +
+  xlab("age") +
+  ylab("y") +
+  scale_fill_manual(values = c("blue", "red"))
+ggplot(bank, aes(x = duration, fill = y)) +
+  geom_histogram(position = "dodge", binwidth = 1) +
+  ggtitle("y on duration") +
+  xlab("duration") +
+  ylab("y") +
+  scale_fill_manual(values = c("blue", "red"))
+ggplot(bank, aes(x = campaign, fill = y)) +
+  geom_histogram(position = "dodge", binwidth = 1) +
+  ggtitle("y on campaign") +
+  xlab("campaign") +
+  ylab("y") +
+  scale_fill_manual(values = c("blue", "red"))
+ggplot(bank, aes(x = pdays, fill = y)) +
+  geom_histogram(position = "dodge", binwidth = 1) +
+  ggtitle("y on pdays") +
+  xlab("pdays") +
+  ylab("y") +
+  scale_fill_manual(values = c("blue", "red"))
+ggplot(bank, aes(x = previous, fill = y)) +
+  geom_histogram(position = "dodge", binwidth = 1) +
+  ggtitle("y on previous") +
+  xlab("previous") +
+  ylab("y") +
+  scale_fill_manual(values = c("blue", "red"))
+plot(bank$job,bank$y,main = "job")
+plot(bank$marital,bank$y,main = "marital")
+plot(bank$education,bank$y,main = "education")
+plot(bank$default,bank$y,main = "default")
+plot(bank$housing,bank$y,main = "housing")
+plot(bank$loan,bank$y,main = "loan")
+plot(bank$contact,bank$y,main = "contact")
+plot(bank$month,bank$y,main = "month")
+plot(bank$day_of_week,bank$y,main = "day_of_week")
+plot(bank$poutcome,bank$y,main = "poutcome")
+```
+
+#(b) Similar to Task 1, I have also opted to use stratified sampling to extract a proportional 2/3 from the total samples of 'y=yes' and 'y=no' to form the training set, with the remainder serving as the test set. This approach reduces sample variance and ensures representation of all subgroups within the sample.
+```{r}
+#b
+b=as.numeric(bank$y == "yes")
+length(b==0)
+length(b==1)
+mdata=data.frame(bank)
+mdata1=mdata[which (mdata$y=="yes"),]
+mdata0=mdata[which(mdata$y=="no"),]
+indices_1=sample(c(1:nrow(mdata1)),nrow(mdata1)*2/3,replace=FALSE)
+mtraindat1=mdata1[indices_1,]
+mtestdat1=mdata1[-indices_1,]
+indices_0=sample(c(1:nrow(mdata0)),nrow(mdata0)*2/3,replace=FALSE)
+mtraindat0=mdata0[indices_0,]
+mtestdat0=mdata0[-indices_0,]
+train_bank=rbind(mtraindat0,mtraindat1)
+test_bank=rbind(mtestdat0,mtestdat1)
+train_bank=as.data.frame(train_bank)
+test_bank=as.data.frame(test_bank)
+a=as.numeric(test_bank$y == "yes")
+train_control=trainControl(method = "cv", number = 10)
+```
+
+#(c) The logistic regression model provides information about the magnitude and direction of the effect of each predictor variable. The number of Fisher Scoring iterations is 10, indicating that the model underwent 10 iterations to meet the convergence criteria, showing relatively fast convergence. I chose to adjust the threshold for classifying predicted probabilities to enhance the model's predictive accuracy. From the graph, it is evident that the accuracy peaks at around 90% when the threshold is set to 0.37, which is quite high. The Sensitivity also reaches 96.56%, and the Specificity is 46.77%. This suggests that the Generalized Linear Model (GLM) is well-suited to the assumption of a linear relationship between the independent variables and the log odds, and is not adversely affected by its limitations.
+```{r}
+#c
+modlr=glm(y~.,data=train_bank,
+          family = binomial(logit))
+summary(modlr)
+par(mfrow = c(1, 1)) 
+accuracy_3=numeric()
+for (i in 1:300){
+  x=1/(1+0.01*i)
+  lrpred=predict(modlr,newdata=test_bank, type = "response")#predict on testing set gives probabilities
+  lrpred[which(lrpred>=x)]=1
+  lrpred[which(lrpred<x)]=0
+  lrpred=as.factor(lrpred)
+  accuracy_3[i]=sum(lrpred==a)/length(lrpred)
+}
+max_position=which.max(accuracy_3)
+x=1/(1+0.01*max_position)
+lrpred<-predict(modlr,newdata=test_bank, type = "response")#predict on testing set gives probabilities
+lrpred[which(lrpred>=x)]=1
+lrpred[which(lrpred<x)]=0
+lrpred=as.factor(lrpred)
+num_lrpred=as.numeric(lrpred)
+roc_glm=roc(a, num_lrpred)
+auc_glm=auc(roc_glm)
+plot(accuracy_3, xlab ="Thresholds",
+     main = "Accurancies of different Thresholds",type = 'l')
+print(max_position)
+print(auc_glm)
+print(confusionMatrix(as.factor(lrpred), as.factor(a)))
+```
+
+#(d) The random forest model excels in handling high-dimensional data and complex nonlinear relationships, making it a suitable model for this dataset. I optimized the model by adjusting the number of trees and node depth, finding that the model performs best with approximately 20 trees and a node depth of 12, achieving an accuracy rate of 90%, a Sensitivity of 97.06%, and a Specificity of 41.03%. However, it is challenging to interpret the relationships between the dependent and independent variables within the model, which is a limitation of the random forest approach.
+```{r}
+#d
+accuracy_4=numeric()
+for (i in 1:30) {
+  random_forest=rfsrc(y~., method="class", 
+                      trControl = train_control,
+                      data=train_bank,ntree = i)
+  rfpred=predict(random_forest, newdata=test_bank, outcome.target=class)
+  accuracy_4[i]=sum(rfpred$class==test_bank$y)/nrow(test_bank)
+}
+accuracy_44=numeric()
+for (i in 1:30){
+  random_forest=rfsrc(y~.,method="class",
+                      data=train_bank,ntree = 20,
+                      nodedepth=i)
+  rfpred=predict(random_forest, newdata=test_bank, outcome.target=class)
+  accuracy_44[i]=sum(rfpred$class==test_bank$y)/nrow(test_bank)
+}
+random_forest=rfsrc(y~.,method="class",
+                      data=train_bank,ntree = 20,
+                      nodedepth=12)
+rfpred=predict(random_forest, newdata=test_bank, outcome.target=class)
+num_rfpred=as.numeric(rfpred$class == "yes")
+roc_rf=roc(a, num_rfpred)
+auc_rf=auc(roc_rf)
+summary(random_forest)
+print(confusionMatrix(as.factor(rfpred$class), as.factor(test_bank$y)))
+print(auc_rf)
+plot(accuracy_4, xlab ="ntree", type = 'l',
+     main = "Accuraries of different ntree")
+plot(accuracy_44, xlab ="nodedepth", type='l',
+     main = "Accuraries of different ntree")
+```
+
+#(e) In fitting the Generalized Additive Model (GAM), I roughly set different degrees of freedom for the smooth terms of independent variables based on the complexity of the data in the smooth terms. The deviance explained is 39.6%, which indicates that 60.4% of the data information is not explained by the model, a concerning indication. However, the model can still achieve a predictive accuracy of 90%, with a Sensitivity of 97.6% and a Specificity of 38.29%. The confidence intervals of the smoothing curves suggest that the settings of these smooth terms are reasonable and important for the model.
+```{r}
+#e
+modgam=gam(y~s(age, k=8)+s(duration, k=8)+s(campaign, k=5)+s(previous, k=3)+s(pdays, k=3)+job+marital+education+default+housing+loan+contact+month+day_of_week+poutcome,
+            trControl = train_control, 
+            data=train_bank,family = binomial(link="logit"))
+summary(modgam)
+gampred=predict(modgam,newdata=test_bank,type="response")
+gampred[which(gampred<=0.5)]=0
+gampred[which(gampred>0.5)]=1
+gampred=as.factor(gampred)
+psst=sum(gampred==a)/length(gampred)
+AIC(modgam)
+confusionMatrix(as.factor(gampred), as.factor(a))
+num_gampred=as.numeric(gampred)
+roc_gam=roc(a, num_gampred)
+auc_gam=auc(roc_gam)
+par(mfrow = c(2, 2))
+print(psst)
+print(auc_gam)
+plot(modgam)
+```
+
+#(f) Firstly, the predictive accuracies, Sensitivities, and Specificities of the three models are very close, all exhibiting high sensitivity and low specificity. This may be due to a strong signal in the dataset regarding 'y=1' that can be easily captured by all three models, but a lack of information about 'y=0', leading to a common bottleneck in model fitting. Although the random forest model has the highest Area Under the Curve (AUC) value, and the Generalized Linear Model (GLM) has the lowest, the differences are not substantial, and all three AUC values are not very high (GLM: 0.6475, Random Forest: 0.6904, GAM: 0.6794). This indicates that the random forest model performs better in correctly differentiating positive and negative classes under various classification thresholds but is still limited by the characteristics of the data. Overall, the random forest model has the best performance, but due to its interpretability challenges, the GAM model would be preferable for exploring the relationships between the response variable and the 15 independent variables.
+
+#(g) Due to the differing criteria for measuring importance in the 'randomForest' and 'randomForestSRC' libraries, I chose to identify the three most important independent variables from the random forest models fitted with these libraries, based on the importance scores of the 15 variables. I then used these three variables to fit a new logistic regression model. Although a comparison of AIC values indicates that the new model is more complex, its Number of Fisher Scoring iterations decreased to 5, and its predictive accuracy is almost identical to the old model. This suggests that the new model converges faster without compromising performance. Furthermore, the three selected variables exhibit smaller p-values in the simplified model than in the original model, indicating that the simplified model better represents the relationship between the response variable and these three independent variables, thereby increasing their significance in predicting the response variable. Therefore, identifying and fitting a logistic model with the most important variables for the response variable can simplify the model and facilitate more efficient iterations, proving to be beneficial.
+```{r}
+#g
+random_forest=randomForest(y~.,method="class",
+                    data=train_bank,ntree = 20, importance = TRUE)
+par(mfrow = c(1, 1))
+varImpPlot(random_forest)
+
+random_forest=rfsrc(y~.,method="class",
+                    trControl = train_control, 
+                    data=train_bank,ntree = 20, importance = TRUE)
+importance=as.data.frame(random_forest$importance)
+sorted_importance=importance[order(importance$all, decreasing = TRUE), ]
+top_three_features=rownames(sorted_importance)[1:3]
+print(top_three_features)
+
+modlr_all=glm(y~.,data=train_bank, 
+              family = binomial(logit))
+summary(modlr_all)
+
+modlr_randomForest=glm(y~duration+age+month,data=train_bank, 
+          family = binomial(logit))
+summary(modlr_randomForest)
+
+modlr_rfsrc=glm(y~duration+age+pdays,data=train_bank, 
+          family = binomial(logit))
+summary(modlr_rfsrc)
+
+for (i in 1:300){
+  x=1/(1+0.01*i)
+  lrpred=predict(modlr_randomForest,newdata=test_bank, type = "response")#predict on testing set gives probabilities
+  lrpred[which(lrpred>=x)]=1
+  lrpred[which(lrpred<x)]=0
+  lrpred=as.factor(lrpred)
+  accuracy_3[i]=sum(lrpred==a)/length(lrpred)
+}
+max_position=which.max(accuracy_3)
+
+y=1/(1+0.98)
+lrpred_randomForest=predict(modlr_randomForest,newdata=test_bank, type = "response")#predict on testing set gives probabilities
+lrpred_randomForest[which(lrpred_randomForest<=y)]=0
+lrpred_randomForest[which(lrpred_randomForest>y)]=1
+lrpred_randomForest=as.factor(lrpred_randomForest)
+accuracy_randomForest=sum(lrpred_randomForest==a)/length(lrpred_randomForest)
+
+lrpred_rfsrc=predict(modlr_rfsrc,newdata=test_bank, type = "response")#predict on testing set gives probabilities
+lrpred_rfsrc[which(lrpred_rfsrc<=y)]=0
+lrpred_rfsrc[which(lrpred_rfsrc>y)]=1
+lrpred_rfsrc=as.factor(lrpred_rfsrc)
+accuracy_rfsrc=sum(lrpred_rfsrc==a)/length(lrpred_rfsrc)
+
+lrpred_all=predict(modlr_all,newdata=test_bank, type = "response")#predict on testing set gives probabilities
+lrpred_all[which(lrpred_all<=y)]=0
+lrpred_all[which(lrpred_all>y)]=1
+lrpred_all=as.factor(lrpred_all)
+accuracy_all=sum(lrpred_all==a)/length(lrpred_all)
+
+cat("Accuracy of GLM using the 3 most important variables of randomForest is",accuracy_randomForest,"\n",
+      "Accuracy of GLM using the 3 most important variables of rfsrc is",accuracy_rfsrc,"\n",
+      "Accuracy of GLM using all variables is",accuracy_randomForest,"\n")
+```
+
+#2h The partial dependence plot reveals a significant influence of age on the response variable. When age is relatively low, the probability of signing up for a long-term deposit increases with age, peaking at around 45 years old. However, this probability decreases as age continues to increase, with a notable sharp decline at the age of 60.
+```{r}
+#2h
+train_bank$age=as.numeric(train_bank$age)
+train_bank$y=as.numeric(train_bank$y=="no")
+
+rf_model=randomForest(y~.,data=train_bank,ntree = 100)
+partialPlot(rf_model, train_bank, age)
+```
