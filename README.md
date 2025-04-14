@@ -25,9 +25,8 @@ It consists of two parts focused on binary classification:
 
 ## 📁 Files
 
-- `Task1_Checkerboard_Classification.Rmd`: Code and results for Task 1
-- `Task2_Bank_Marketing_Models.Rmd`: Code and results for Task 2
-- `Task1_Report.pdf` / `Task2_Report.pdf`: Written reports
-- `data/Portuguese_Bank_sample.csv`: Sample from the original Kaggle dataset
+- `Data_Learning.Rmd`: Code and results for Tasks
+- `Data_Learning.html`: Written reports
+- `Portuguese_Bank.csv`: Sample from the original Kaggle dataset
 
 > 📌 Note: All code and analysis are my original work. Data has been partially sampled from the [Kaggle Banking Dataset](https://www.kaggle.com/datasets/rashmiranu/banking-dataset-classification) and used for educational purposes only.
